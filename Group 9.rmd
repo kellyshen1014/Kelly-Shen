@@ -1,0 +1,176 @@
+---
+title: "Crime and Education - It is more complicated than you think"
+author: "Kelly Shen, Racheal Yan"
+group: "No.9"
+date: "2018/11/12"
+output:
+  html_document:
+    code_folding: hide
+    highlight: tango
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+    df_print: kable
+---
+
+```{r setup, include=FALSE, warning=FALSE, results= 'hide'}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background Information 
+
+After the passage of a landmark education reform act, Massachusetts public schools have made enormous progress. Massachusetts is widely seen as having the best school system in the country: Just 2 percent of its high-schoolers drop out, for example, and its students’ math and reading scores rank No. 1 nationally. 
+It even performs toward the top on international education indices. But not all have shared equally in that progress. 
+
+So what contributes to the education gap? This got us thinking, perhaps we could gain some insight by exploring the relationship between crimes rate, suspension rate and the geography of schools. Given that MA is a very broad area, we decided to focus primarily on Boston. As a result, we gathered two geographic datasets from Kaggle, one is the Boston Public School Dataset, and  Crime in Boston Dataset. The third one is the drop-out rate per Boston neighborhood, cleaned from Boston public school organization. 
+
+```{r, message=FALSE, warning = FALSE}
+#Load the needed package for the manipulation simple geometric 
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(fivethirtyeight)
+library(tidyr)
+library(sp)
+#The leaflet package is for the use of heatmap
+#install.packages('leaflet.extras', type='source')
+library(leaflet.extras)
+#install the package 
+
+```
+
+```{r, message=FALSE, warning = FALSE}
+#Read the csv files for Boston area public school, the average school drop_out rate
+#and the zip_code file to identify the districts in boston.
+
+Public_Schools <- read_csv("Public_Schools.csv")
+ZIP_Codes <- read_csv("ZIP_Codes.csv")
+Drop_out <- read_csv("Boston DropOutRate.csv", skip = 1)
+crime <- read.csv("crime.csv")
+
+#The crime dataset comtains a great amount of N/A values,
+#so I first deleted all the missing values by using the na.omit function.
+new_crime <- crime[complete.cases(crime),]
+#Filter and focus on the crime in the year 2018
+new_crime <- na.omit(crime) %>% filter(YEAR == "2018")
+
+#As the dataset contains more than 3 million data, it is extremely hard
+#for the web version of R to process and present all the markers in the viewer
+#So we took 1800 random samples from the large dataset which is the maximum process volumn.
+NEW <- new_crime[sample(nrow(new_crime), 2000),]
+```
+
+## Our Findings 
+Both of our maps divide Boston into several districts. In our interactive map, we chose to display the crime rate using gradient (red being higher crime rate), school locations using clusters, and dropout rate using circles (bigger the radius, higher the dropout rate). In our static map, the crime locations and schools were represented in blue and red dots. From these two maps, we found that crimes usually concentrated where schools clustered. We also realized that the map also indicated a higher suspension rate(larger circles in the interactive map) may correlate with a higher crime rate since they often appear on the red area in the heatmap. Note, we chose to randomely map 800 crimes to the static map and 2000 crimes to the interactive map due to R's limited mapping ability. 
+
+```{r, message=FALSE, warning = FALSE}
+#Rename the lng and lat for the dataset
+Public_Schools <- Public_Schools %>%
+  rename(Long = X, Lat = Y, ZIP5 = ZIPCODE)
+Drop_out <- Drop_out %>%
+  rename(Long = long, Lat = lat)
+bos <- sf::read_sf("ZIP_Codes.shp")
+
+#create the leaflet interactive map
+leaflet() %>% addTiles() %>%
+  #Add two providertiles to the map
+addProviderTiles("CartoDB", group = "Carto") %>%
+addProviderTiles("Esri", group = "Esri") %>%
+  #Heatmap can best present the crime cluster in the boston area since huge amount of data
+  #makes all the crime location point overlap with each other.
+  #By using the heatmap, the frequency of the crime rate can be represented by the colors
+  addHeatmap(data = NEW, max = 0.7, blur = 40)  %>%
+  addPolygons(data = bos, weight = 2) %>% 
+  #The magnitude of dropout rate is represented by the size of circle
+addCircleMarkers(
+    data = Public_Schools,
+    color =
+      "blue",
+    clusterOptions = markerClusterOptions(),
+    popup = ~ SCH_NAME,
+    group = "Public_Schools"
+  ) %>%
+addCircleMarkers(
+    data = Drop_out,
+    weight = 10,
+    radius = ~ DropOutRate,
+    popup = ~ District,
+    color = "white",
+    group = "Drop Out Rate"
+  ) %>%
+  #Add the base layers to the interactive map
+addLayersControl(
+    baseGroups = c("OSM", "Carto", "Esri"),
+    overlayGroups = c("Public_Schools", "Drop Out Rate")
+  ) %>%
+  #setview at the zoom of 11 at the mid point of boston are
+  #to give a best overview of the map
+setView(lng = -71.057083,
+          lat = 42.32055,
+          zoom = 11)
+```
+
+```{r}
+#Read the shape file using sf package 
+#and add centroids to each region using purrr package
+bos <- sf::read_sf("ZIP_Codes.shp") %>%
+  mutate(
+    lon = purrr::map_dbl(geometry, ~sf::st_centroid(.x)[[1]]),
+    lat = purrr::map_dbl(geometry, ~sf::st_centroid(.x)[[2]])
+    )
+
+#Transform the dropout csv into the form of sf 
+dropup_rate <- Drop_out %>%
+  sf::st_as_sf(coords = c("Long", "Lat"), crs = 4326)
+
+NEW <- new_crime[sample(nrow(new_crime), 800), ]
+crime <- NEW %>%
+  sf::st_as_sf(coords = c("Long", "Lat"), crs = 4326)
+
+#Select the Simple Features from the public school dataset 
+public <- Public_Schools %>%
+  select(Long, Lat, CITY) 
+#Add centroids to each school location using purrr package
+public <- public %>%
+  sf::st_as_sf(coords = c("Long", "Lat"), crs = 4326)
+
+#Plot this data
+ggplot() +
+  #Draw the zip district of boston area and differentiate them using colors
+  geom_sf(data = bos, col = sf.colors(43, categorical = TRUE)) +
+  #Pinpoint the school locations
+  geom_sf(data = crime , col = "blue") +
+  geom_sf(data = public, col = "firebrick") +
+  geom_polygon() +
+  #Add the name of zipcode areas using the geom_text
+  #geom_text(data = bos, aes(x=lon, y=lat)) +
+  scale_fill_gradient(low = "white", high = "black") +
+  theme(legend.position = "none") +
+  xlab("Longitude") + ylab("Latitude") +
+  labs(title = "Boston Public School V.S Crime Location",
+       caption = "We have randomly picked 800 crime locations(which is the maximum points for display) to be mapped \n on our static map to prevent overcrowding. \nCrime Location = Blue\nSchool Location = Red")
+```
+
+This is perhaps that public schools tend to adopt a “no-excuse” philosophy. This approach borrows heavily from a “zero tolerance” policing ideology that emphasizes cracking down on minor offenses, including by searching the pockets of teenagers living in low-income neighborhoods for drugs and weapons, to prevent major crimes such as drug dealing down the road. In a classroom setting, this translates into a belief that the smallest infractions, such as passing a note during class, is to be met with an immediate consequence. Depending on the offense, that can escalate from being asked to stand up for the rest of the class to being sent home on an “out-of-school suspension.” Researchers have found that being suspended is a strong indicator that a student will eventually drop out. As a result, given such high suspension rate, students who drop out are much more likely to commit crime and end up in prison, becoming part of the “school to prison pipeline.”   
+
+We need to also keep in mind that public schools suspended higher percentages of black students and students with disabilities than traditional schools did. This could be potentially a nightmare for students with disadvantages and may eventually contribute to the enlarging gap among students.    
+
+##Policy 
+When it comes to reform, fiscal matters are the first to come into mind. However, we believe that a policy that aims to reduce suspension rate is more appropriate. Therefore, we propose that  all Boston public schools should reduce the length of time students are suspended and/or expelled, and provide students culture sensitive support for re-engagement plans. An annual fund should be rewarded to those who made an effort to follow such policy.  
+
+The goal of this new policy is to increase access to opportunity by giving students second chance so that all students in the Boston Public Schools can succeed regardless of race or class. The policy also made an attempt to be sensitive toward students of color who may face bigger challenges compare to their white counterpart. 
+
+At the end of the day, the public schools should work together to help maintain lower dropout rate. It is a difficult problem to tackle, but this is precisely the kind of problem we should talk about. And although we may never reach to a consensus on the matter of public school education, it is important that we make  a conscious effort towards the ultimate goal. 
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+##Reference
+* [Taking Massachusetts ed reform to the next level](https://www.bostonglobe.com/opinion/editorials/2018/09/29/taking-mass-education-reform-next-level/rVV9Ddp4iFaXsDwnwO9A6M/story.html){target="_blank"}
+* [The Disturbing Reason Why Some Charter Schools May Have Higher Test Scores](https://www.motherjones.com/politics/2016/03/charter-schools-suspend-more-black-students-disabilities-test-scores/)
+* [Crime In Boston Kaggle Dataset](https://www.kaggle.com/ankkur13/boston-crime-data){target="_blank"}
+* [Boston Public School Organization](https://www.bostonpublicschools.org/Page/695){target="_blank"}
+* [Boston Public School Kaggle Dataset](https://www.kaggle.com/prashantsaraswat123/boston-public-schools-dataset-analysis/data){target="_blank"}
+
